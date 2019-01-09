@@ -219,13 +219,21 @@ func process(packets <-chan gopacket.Packet, window time.Duration) {
 	}
 	// Finish processing any last packets
 	updateStatistics()
-	log.Println(ip2index, states)
-	log.Println(hostStatistics)
-
-	// TODO: agregation relies on knowing our IP
 }
 
 func WriteOutput(output *os.File) {
+	// Print header
+	fmt.Fprintf(output, "ip, ")
+	for _, label := range labels {
+		fmt.Fprintf(output, "%s, ", label)
+	}
+
+	for ip, hostStats := range hostStatistics {
+		fmt.Fprintf(output, "\n%s, ", ip)
+		for _, stat := range hostStats {
+			fmt.Fprintf(output, "%g, ", stat.Result())
+		}
+	}
 }
 
 func main() {
@@ -240,7 +248,6 @@ func main() {
 	// times of first and last packet
 
 	outputFile := CreateFileOrFail(*outputPath)
-	fmt.Println(*outputPath)
 	pcapFile := OpenPcapOrFail(*pcapPath)
 
 	// Only look at tcp traffic directed scanning machine
