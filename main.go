@@ -133,6 +133,7 @@ func OrderPacketStream(input <-chan gopacket.Packet, output chan<- gopacket.Pack
 	for _, packet := range buffer {
 		output <- packet
 	}
+	close(output)
 }
 
 func process(packets <-chan gopacket.Packet) {
