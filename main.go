@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math"
 	"net"
 	"os"
 	"sort"
@@ -14,6 +13,7 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/pcap"
 	"github.com/google/gopacket/layers"
+	stream "github.com/adrs/packetrate/stream"
 )
 
 func OpenFileOrFail(path string) *os.File {
@@ -95,58 +95,61 @@ func OrderPacketStream(input <-chan gopacket.Packet, output chan<- gopacket.Pack
 	close(output)
 }
 
-// TODO: move to streaming statistics package
-// Stores information pertaining to the computation of a statistic ex: min, max, mean, stdev
-type Statistic interface {
-	Update(sample float64)
-	Result() float64
+var labels = []string{
+	"min pps sent",
+	"max pps sent",
+	"total packets sent",
+	"min Bps sent",
+	"max Bps sent",
+	"total byte sents",
+	"min pps received",
+	"max pps received",
+	"total packets received",
+	"min Bps received",
+	"max Bps received",
+	"total byte received",
 }
 
-// Store minimum value in a stream
-type StreamMin struct {
-	Min float64
-}
-
-func NewStreamMin() *StreamMin {
-	return &StreamMin{math.MaxFloat64}
-}
-
-func (s *StreamMin) Update(sample float64) {
-	if(sample < s.Min) {
-		s.Min = sample
+func makeHostStatistics() []stream.Statistic {
+	return []stream.Statistic{
+		// sent
+		stream.NewMin(),
+		stream.NewMax(),
+		stream.NewSum(),
+		stream.NewMin(),
+		stream.NewMax(),
+		stream.NewSum(),
+		// received
+		stream.NewMin(),
+		stream.NewMax(),
+		stream.NewSum(),
+		stream.NewMin(),
+		stream.NewMax(),
+		stream.NewSum(),
 	}
 }
 
-func (s *StreamMin) Result() float64 { return s.Min }
-
-
-/*
-type StatisticsGroup struct {
-	Statistics []Statistic
-	Labels     []string
-} */
-
-// IP -> statistics for packets sent to IP
-var destinationStatistics = make(map[string][]Statistic)
-
-// IP -> statistics for packets received from IP
-var sourceStatistics = make(map[string][]Statistic)
+var hostStatistics = make(map[string][]stream.Statistic)
 
 // aggregate 
-var aggregateSendStatistics = []Statistic{NewStreamMin()}
-var aggregateReceiveStatistics = []Statistic{NewStreamMin()}
+//var aggregateSendStatistics = []stream.Statistic{stream.NewMin()}
+//var aggregateReceiveStatistics = []stream.Statistic{NewStreamMin()}
 
 type WindowState struct {
 	NumPacketsSent int
 	NumPacketsReceived int
 	NumBytesSent int
 	NumBytesReceived int
+	// TODO: First and last times
 }
 
 func process(packets <-chan gopacket.Packet, window time.Duration) {
 	var windowEnd time.Time
+	var windowSeconds = window.Seconds()
 
+	// Stores number of packets sent so far in window
 	var states = make([]WindowState, 0)
+	// Maps ips to current counts
 	var ip2index = make(map[string]int)
 
 	getIndex := func(ip net.IP) int {
@@ -160,10 +163,41 @@ func process(packets <-chan gopacket.Packet, window time.Duration) {
 		return i
 	}
 
+	updateStatistics := func() {
+		for ip, i := range ip2index {
+			var hostStats []stream.Statistic
+			var ok bool
+			if hostStats, ok = hostStatistics[ip]; !ok {
+				hostStats = makeHostStatistics()
+			}
+			// update stats on 
+			pps := float64(states[i].NumPacketsSent)/windowSeconds
+			hostStats[0].Update(pps)
+			hostStats[1].Update(pps)
+			hostStats[2].Update(float64(states[i].NumPacketsSent))
+
+			bps := float64(states[i].NumBytesSent)/windowSeconds
+			hostStats[3].Update(bps)
+			hostStats[4].Update(bps)
+			hostStats[5].Update(float64(states[i].NumBytesSent))
+			pps = float64(states[i].NumPacketsReceived)/windowSeconds
+			hostStats[6].Update(pps)
+			hostStats[7].Update(pps)
+			hostStats[8].Update(float64(states[i].NumPacketsReceived))
+
+			bps = float64(states[i].NumBytesReceived)/windowSeconds
+			hostStats[9].Update(bps)
+			hostStats[10].Update(bps)
+			hostStats[11].Update(float64(states[i].NumBytesReceived))
+			hostStatistics[ip] = hostStats
+		}
+	}
+
 	for packet := range packets {
 		curTime := PacketTimestamp(packet)
 		if curTime.After(windowEnd) {
 			// Window is over -> update statistics
+			updateStatistics()
 			// TODO: figure out how to set next windowEnd (so they don't overlap)
 		}
 
@@ -183,9 +217,15 @@ func process(packets <-chan gopacket.Packet, window time.Duration) {
 		states[i].NumPacketsReceived++
 		states[i].NumBytesReceived += size
 	}
+	// Finish processing any last packets
+	updateStatistics()
 	log.Println(ip2index, states)
+	log.Println(hostStatistics)
 
 	// TODO: agregation relies on knowing our IP
+}
+
+func WriteOutput(output *os.File) {
 }
 
 func main() {
@@ -199,7 +239,7 @@ func main() {
 	// {min, max, avg, stdev, 90th, 95th} x {packets/sec, bits/sec} U {total} x {packets, bits}
 	// times of first and last packet
 
-	//outputFile := CreateFileOrFail(*outputPath)
+	outputFile := CreateFileOrFail(*outputPath)
 	fmt.Println(*outputPath)
 	pcapFile := OpenPcapOrFail(*pcapPath)
 
@@ -213,5 +253,5 @@ func main() {
 	orderedPackets := make(chan gopacket.Packet)
 	go OrderPacketStream(packets, orderedPackets, *epsilon)
 	process(orderedPackets, *window)
-	log.Println("Done!")
+	WriteOutput(outputFile)
 }
