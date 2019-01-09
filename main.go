@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"log"
 	"math"
-//	"net"
+	"net"
 	"os"
 	"sort"
 	"time"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/pcap"
-//	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/layers"
 )
 
 func OpenFileOrFail(path string) *os.File {
@@ -46,47 +46,6 @@ func OpenPcapOrFail(path string) *pcap.Handle {
 		return handle
 	}
 }
-
-// TODO: move to streaming statistics package
-// Stores information pertaining to the computation of a statistic ex: min, max, mean, stdev
-type Statistic interface {
-	Update(sample float64)
-	Result() float64
-}
-
-// Store minimum value in a stream
-type StreamMin struct {
-	Min float64
-}
-
-func NewStreamMin() *StreamMin {
-	return &StreamMin{math.MaxFloat64}
-}
-
-func (s *StreamMin) Update(sample float64) {
-	if(sample < s.Min) {
-		s.Min = sample
-	}
-}
-
-func (s *StreamMin) Result() float64 { return s.Min }
-
-
-/*
-type StatisticsGroup struct {
-	Statistics []Statistic
-	Labels     []string
-} */
-
-// IP -> statistics for packets sent to IP
-var destinationStatistics = make(map[string][]Statistic)
-
-// IP -> statistics for packets received from IP
-var sourceStatistics = make(map[string][]Statistic)
-
-// aggregate 
-var aggregateSendStatistics = []Statistic{NewStreamMin()}
-var aggregateReceiveStatistics = []Statistic{NewStreamMin()}
 
 func PacketTimestamp(packet gopacket.Packet) time.Time {
 	return packet.Metadata().CaptureInfo.Timestamp
@@ -136,11 +95,97 @@ func OrderPacketStream(input <-chan gopacket.Packet, output chan<- gopacket.Pack
 	close(output)
 }
 
-func process(packets <-chan gopacket.Packet) {
-	//var stepStart time.Time
-	for packet := range packets {
-		fmt.Println(PacketTimestamp(packet))
+// TODO: move to streaming statistics package
+// Stores information pertaining to the computation of a statistic ex: min, max, mean, stdev
+type Statistic interface {
+	Update(sample float64)
+	Result() float64
+}
+
+// Store minimum value in a stream
+type StreamMin struct {
+	Min float64
+}
+
+func NewStreamMin() *StreamMin {
+	return &StreamMin{math.MaxFloat64}
+}
+
+func (s *StreamMin) Update(sample float64) {
+	if(sample < s.Min) {
+		s.Min = sample
 	}
+}
+
+func (s *StreamMin) Result() float64 { return s.Min }
+
+
+/*
+type StatisticsGroup struct {
+	Statistics []Statistic
+	Labels     []string
+} */
+
+// IP -> statistics for packets sent to IP
+var destinationStatistics = make(map[string][]Statistic)
+
+// IP -> statistics for packets received from IP
+var sourceStatistics = make(map[string][]Statistic)
+
+// aggregate 
+var aggregateSendStatistics = []Statistic{NewStreamMin()}
+var aggregateReceiveStatistics = []Statistic{NewStreamMin()}
+
+type WindowState struct {
+	NumPacketsSent int
+	NumPacketsReceived int
+	NumBytesSent int
+	NumBytesReceived int
+}
+
+func process(packets <-chan gopacket.Packet, window time.Duration) {
+	var windowEnd time.Time
+
+	var states = make([]WindowState, 0)
+	var ip2index = make(map[string]int)
+
+	getIndex := func(ip net.IP) int {
+		ipString := ip.String()
+		if i, ok := ip2index[ipString]; ok {
+			return i
+		}
+		i := len(states)
+		ip2index[ipString] = i
+		states = append(states, WindowState{})
+		return i
+	}
+
+	for packet := range packets {
+		curTime := PacketTimestamp(packet)
+		if curTime.After(windowEnd) {
+			// Window is over -> update statistics
+			// TODO: figure out how to set next windowEnd (so they don't overlap)
+		}
+
+		ip4layer := packet.Layer(layers.LayerTypeIPv4)
+		if ip4layer == nil {
+			continue
+		}
+		ip4 := ip4layer.(*layers.IPv4)
+
+		// Packet size in bytes
+		size := len(packet.Data())
+
+		i := getIndex(ip4.SrcIP)
+		states[i].NumPacketsSent++
+		states[i].NumBytesSent += size
+		i = getIndex(ip4.DstIP)
+		states[i].NumPacketsReceived++
+		states[i].NumBytesReceived += size
+	}
+	log.Println(ip2index, states)
+
+	// TODO: agregation relies on knowing our IP
 }
 
 func main() {
@@ -155,7 +200,7 @@ func main() {
 	// times of first and last packet
 
 	//outputFile := CreateFileOrFail(*outputPath)
-	fmt.Println(*outputPath, *window)
+	fmt.Println(*outputPath)
 	pcapFile := OpenPcapOrFail(*pcapPath)
 
 	// Only look at tcp traffic directed scanning machine
@@ -167,6 +212,6 @@ func main() {
 	packets := gopacket.NewPacketSource(pcapFile, pcapFile.LinkType()).Packets()
 	orderedPackets := make(chan gopacket.Packet)
 	go OrderPacketStream(packets, orderedPackets, *epsilon)
-	process(orderedPackets)
+	process(orderedPackets, *window)
 	log.Println("Done!")
 }
