@@ -1,8 +1,6 @@
 package main
 
 import (
-//	"bufio"
-//	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -98,15 +96,23 @@ func OrderPacketStream(input <-chan gopacket.Packet, output chan<- gopacket.Pack
 var labels = []string{
 	"min pps sent",
 	"max pps sent",
+	"avg pps sent",
+	"stdev pps sent",
 	"total packets sent",
 	"min Bps sent",
 	"max Bps sent",
-	"total byte sents",
+	"avg Bps sent",
+	"stdev Bps sent",
+	"total byte sent",
 	"min pps received",
 	"max pps received",
+	"avg pps received",
+	"stdev pps received",
 	"total packets received",
 	"min Bps received",
 	"max Bps received",
+	"avg Bps received",
+	"stdev Bps received",
 	"total byte received",
 }
 
@@ -115,16 +121,24 @@ func makeHostStatistics() []stream.Statistic {
 		// sent
 		stream.NewMin(),
 		stream.NewMax(),
+		stream.NewMean(),
+		stream.NewStdev(),
 		stream.NewSum(),
 		stream.NewMin(),
 		stream.NewMax(),
+		stream.NewMean(),
+		stream.NewStdev(),
 		stream.NewSum(),
 		// received
 		stream.NewMin(),
 		stream.NewMax(),
+		stream.NewMean(),
+		stream.NewStdev(),
 		stream.NewSum(),
 		stream.NewMin(),
 		stream.NewMax(),
+		stream.NewMean(),
+		stream.NewStdev(),
 		stream.NewSum(),
 	}
 }
@@ -174,21 +188,30 @@ func process(packets <-chan gopacket.Packet, window time.Duration) {
 			pps := float64(states[i].NumPacketsSent)/windowSeconds
 			hostStats[0].Update(pps)
 			hostStats[1].Update(pps)
-			hostStats[2].Update(float64(states[i].NumPacketsSent))
+			hostStats[2].Update(pps)
+			hostStats[3].Update(pps)
+			hostStats[4].Update(float64(states[i].NumPacketsSent))
 
 			bps := float64(states[i].NumBytesSent)/windowSeconds
-			hostStats[3].Update(bps)
-			hostStats[4].Update(bps)
-			hostStats[5].Update(float64(states[i].NumBytesSent))
+			hostStats[5].Update(bps)
+			hostStats[6].Update(bps)
+			hostStats[7].Update(bps)
+			hostStats[8].Update(bps)
+			hostStats[9].Update(float64(states[i].NumBytesSent))
+
 			pps = float64(states[i].NumPacketsReceived)/windowSeconds
-			hostStats[6].Update(pps)
-			hostStats[7].Update(pps)
-			hostStats[8].Update(float64(states[i].NumPacketsReceived))
+			hostStats[10].Update(pps)
+			hostStats[11].Update(pps)
+			hostStats[12].Update(pps)
+			hostStats[13].Update(pps)
+			hostStats[14].Update(float64(states[i].NumPacketsReceived))
 
 			bps = float64(states[i].NumBytesReceived)/windowSeconds
-			hostStats[9].Update(bps)
-			hostStats[10].Update(bps)
-			hostStats[11].Update(float64(states[i].NumBytesReceived))
+			hostStats[15].Update(bps)
+			hostStats[16].Update(bps)
+			hostStats[17].Update(bps)
+			hostStats[18].Update(bps)
+			hostStats[19].Update(float64(states[i].NumBytesReceived))
 			hostStatistics[ip] = hostStats
 		}
 	}
@@ -198,7 +221,8 @@ func process(packets <-chan gopacket.Packet, window time.Duration) {
 		if curTime.After(windowEnd) {
 			// Window is over -> update statistics
 			updateStatistics()
-			// TODO: figure out how to set next windowEnd (so they don't overlap)
+			// TODO: how to have windows be consecutive while skipping large gaps
+			windowEnd = curTime.Add(window)
 		}
 
 		ip4layer := packet.Layer(layers.LayerTypeIPv4)
@@ -223,9 +247,9 @@ func process(packets <-chan gopacket.Packet, window time.Duration) {
 
 func WriteOutput(output *os.File) {
 	// Print header
-	fmt.Fprintf(output, "ip, ")
-	for _, label := range labels {
-		fmt.Fprintf(output, "%s, ", label)
+	fmt.Fprintf(output, "1) ip, ")
+	for i, label := range labels {
+		fmt.Fprintf(output, "%d) %s, ", i + 2, label)
 	}
 
 	for ip, hostStats := range hostStatistics {
